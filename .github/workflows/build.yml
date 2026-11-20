@@ -1,0 +1,254 @@
+name: Build APK
+on:
+  workflow_dispatch:
+  push:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Create project files
+        run: |
+          mkdir -p $(dirname settings.gradle)
+          cat > settings.gradle <<'EOF_0'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name = "SmsReader"
+          include ':app'
+          EOF_0
+          mkdir -p $(dirname build.gradle)
+          cat > build.gradle <<'EOF_1'
+          plugins { id 'com.android.application' version '8.5.2' apply false }
+          EOF_1
+          mkdir -p $(dirname gradle.properties)
+          cat > gradle.properties <<'EOF_2'
+          org.gradle.jvmargs=-Xmx2g
+          EOF_2
+          mkdir -p $(dirname app/build.gradle)
+          cat > app/build.gradle <<'EOF_3'
+          plugins { id 'com.android.application' }
+          android {
+              namespace 'com.khelo.smsreader'
+              compileSdk 34
+              defaultConfig { applicationId 'com.khelo.smsreader'; minSdk 24; targetSdk 33; versionCode 1; versionName '1.0' }
+              compileOptions { sourceCompatibility JavaVersion.VERSION_1_8; targetCompatibility JavaVersion.VERSION_1_8 }
+          }
+          EOF_3
+          mkdir -p $(dirname app/src/main/AndroidManifest.xml)
+          cat > app/src/main/AndroidManifest.xml <<'EOF_4'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.RECEIVE_SMS"/>
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+              <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+              <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+              <application android:label="SMS Reader" android:allowBackup="false" android:theme="@android:style/Theme.Material.NoActionBar">
+                  <activity android:name=".MainActivity" android:exported="true">
+                      <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+                  </activity>
+                  <receiver android:name=".SmsReceiver" android:exported="true" android:permission="android.permission.BROADCAST_SMS">
+                      <intent-filter android:priority="999"><action android:name="android.provider.Telephony.SMS_RECEIVED"/></intent-filter>
+                  </receiver>
+                  <receiver android:name=".BootReceiver" android:exported="true">
+                      <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED"/></intent-filter>
+                  </receiver>
+                  <service android:name=".KeepAliveService" android:exported="false"/>
+              </application>
+          </manifest>
+          EOF_4
+          mkdir -p $(dirname app/src/main/java/com/khelo/smsreader/BootReceiver.java)
+          cat > app/src/main/java/com/khelo/smsreader/BootReceiver.java <<'EOF_5'
+          package com.khelo.smsreader;
+          import android.content.*;import android.os.Build;
+          public class BootReceiver extends BroadcastReceiver{
+           public void onReceive(Context c,Intent i){try{Intent s=new Intent(c,KeepAliveService.class);if(Build.VERSION.SDK_INT>=26)c.startForegroundService(s);else c.startService(s);}catch(Exception e){}}
+          }
+          EOF_5
+          mkdir -p $(dirname app/src/main/java/com/khelo/smsreader/Db.java)
+          cat > app/src/main/java/com/khelo/smsreader/Db.java <<'EOF_6'
+          package com.khelo.smsreader;
+          import android.content.*;import android.database.*;import android.database.sqlite.*;import java.util.*;
+          public class Db extends SQLiteOpenHelper{
+           static Db i;static synchronized Db get(Context c){if(i==null)i=new Db(c.getApplicationContext());return i;}
+           Db(Context c){super(c,"sms.db",null,1);}
+           public void onCreate(SQLiteDatabase d){d.execSQL("CREATE TABLE sms(id INTEGER PRIMARY KEY AUTOINCREMENT,sender TEXT,prov TEXT,body TEXT,ts INTEGER,mfs INTEGER,trx TEXT,amt TEXT,up INTEGER,sy INTEGER DEFAULT 0,err TEXT)");}
+           public void onUpgrade(SQLiteDatabase d,int a,int b){}
+           static class Row{long id,ts;String sender,prov,body,trx,amt,err;boolean mfs,up,sy;}
+           long add(Row r){ContentValues v=new ContentValues();v.put("sender",r.sender);v.put("prov",r.prov);v.put("body",r.body);v.put("ts",r.ts);v.put("mfs",r.mfs?1:0);v.put("trx",r.trx);v.put("amt",r.amt);v.put("up",r.up?1:0);return getWritableDatabase().insert("sms",null,v);}
+           List<Row> q(String w,int lim){List<Row> l=new ArrayList<>();Cursor c=getReadableDatabase().rawQuery("SELECT id,sender,prov,body,ts,mfs,trx,amt,up,sy,err FROM sms"+(w==null?"":" WHERE "+w)+" ORDER BY id DESC LIMIT "+lim,null);
+            while(c.moveToNext()){Row r=new Row();r.id=c.getLong(0);r.sender=c.getString(1);r.prov=c.getString(2);r.body=c.getString(3);r.ts=c.getLong(4);r.mfs=c.getInt(5)==1;r.trx=c.getString(6);r.amt=c.getString(7);r.up=c.getInt(8)==1;r.sy=c.getInt(9)==1;r.err=c.getString(10);l.add(r);}
+            c.close();return l;}
+           int n(String w){Cursor c=getReadableDatabase().rawQuery("SELECT COUNT(*) FROM sms"+(w==null?"":" WHERE "+w),null);c.moveToFirst();int x=c.getInt(0);c.close();return x;}
+           void mark(long id,boolean ok,String e){ContentValues v=new ContentValues();v.put("sy",ok?1:0);v.put("err",e);getWritableDatabase().update("sms",v,"id=?",new String[]{""+id});}
+          }
+          EOF_6
+          mkdir -p $(dirname app/src/main/java/com/khelo/smsreader/Fb.java)
+          cat > app/src/main/java/com/khelo/smsreader/Fb.java <<'EOF_7'
+          package com.khelo.smsreader;
+          import android.content.*;import org.json.*;import java.io.*;import java.net.*;
+          public class Fb{
+           static String tok;static long tokAt;
+           static SharedPreferences p(Context c){return c.getApplicationContext().getSharedPreferences("cfg",0);}
+           static boolean ok(Context c){return !p(c).getString("db","").isEmpty();}
+           static String[] http(String m,String url,String body)throws Exception{
+            HttpURLConnection u=(HttpURLConnection)new URL(url).openConnection();u.setRequestMethod(m);u.setConnectTimeout(15000);u.setReadTimeout(20000);
+            if(body!=null){u.setDoOutput(true);u.setRequestProperty("Content-Type","application/json");OutputStream o=u.getOutputStream();o.write(body.getBytes("UTF-8"));o.close();}
+            int code=u.getResponseCode();InputStream is=code>=400?u.getErrorStream():u.getInputStream();String r="";
+            if(is!=null){ByteArrayOutputStream b=new ByteArrayOutputStream();byte[] t=new byte[4096];int n;while((n=is.read(t))>0)b.write(t,0,n);r=b.toString("UTF-8");}
+            return new String[]{""+code,r};}
+           static synchronized String auth(Context c)throws Exception{
+            SharedPreferences s=p(c);String em=s.getString("email","").trim();if(em.isEmpty())return null;
+            if(tok!=null&&System.currentTimeMillis()-tokAt<3000000)return tok;
+            String key=s.getString("key","");if(key.isEmpty())throw new Exception("apiKey নেই (কনফিগে apiKey দিন)");
+            JSONObject b=new JSONObject();b.put("email",em);b.put("password",s.getString("pass",""));b.put("returnSecureToken",true);
+            String[] r=http("POST","https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key="+key,b.toString());
+            if(!r[0].equals("200"))throw new Exception("লগইন ব্যর্থ: "+r[1].replaceAll("\\s+"," "));
+            tok=new JSONObject(r[1]).getString("idToken");tokAt=System.currentTimeMillis();return tok;}
+           static void put(Context c,String path,JSONObject o)throws Exception{
+            String db=p(c).getString("db","");if(db.isEmpty())throw new Exception("Firebase কনফিগ দেওয়া হয়নি (সেটিংস ট্যাব)");
+            for(int a=0;a<2;a++){String t=auth(c);String[] r=http("PUT",db+"/"+path+".json"+(t!=null?"?auth="+t:""),o.toString());
+             if(r[0].equals("200"))return;if(r[0].equals("401")&&a==0){tok=null;continue;}
+             throw new Exception("Firebase "+r[0]+": "+(r[1].length()>150?r[1].substring(0,150):r[1]));}}
+          }
+          EOF_7
+          mkdir -p $(dirname app/src/main/java/com/khelo/smsreader/KeepAliveService.java)
+          cat > app/src/main/java/com/khelo/smsreader/KeepAliveService.java <<'EOF_8'
+          package com.khelo.smsreader;
+          import android.app.*;import android.content.*;import android.os.*;
+          public class KeepAliveService extends Service{
+           volatile boolean run=false;Thread th;
+           public IBinder onBind(Intent i){return null;}
+           public int onStartCommand(Intent i,int f,int id){
+            Notification.Builder b;
+            if(Build.VERSION.SDK_INT>=26){((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).createNotificationChannel(new NotificationChannel("keep","SMS Reader",NotificationManager.IMPORTANCE_LOW));b=new Notification.Builder(this,"keep");}else b=new Notification.Builder(this);
+            startForeground(1,b.setContentTitle("SMS Reader চালু আছে").setContentText("নতুন SMS-এর অপেক্ষায়").setSmallIcon(android.R.drawable.ic_dialog_info).setOngoing(true).build());
+            if(!run){run=true;final Context c=this;th=new Thread(new Runnable(){public void run(){while(run){try{if(Db.get(c).n("up=1 AND sy=0")>0)Sync.run(c);}catch(Exception e){}try{Thread.sleep(60000);}catch(InterruptedException e){break;}}}});th.start();}
+            return START_STICKY;}
+           public void onDestroy(){run=false;if(th!=null)th.interrupt();}
+          }
+          EOF_8
+          mkdir -p $(dirname app/src/main/java/com/khelo/smsreader/MainActivity.java)
+          cat > app/src/main/java/com/khelo/smsreader/MainActivity.java <<'EOF_9'
+          package com.khelo.smsreader;
+          import android.Manifest;import android.app.Activity;import android.content.*;import android.content.pm.PackageManager;import android.net.Uri;import android.os.*;import android.provider.Settings;import android.text.InputType;import android.view.*;import android.widget.*;import org.json.JSONObject;import java.text.SimpleDateFormat;import java.util.*;
+          import java.util.regex.*;
+          public class MainActivity extends Activity{
+           LinearLayout box;int tab=0;Handler h=new Handler(Looper.getMainLooper());
+           Runnable tk=new Runnable(){public void run(){if(tab<3)render();h.postDelayed(this,3000);}};
+           int dp(int v){return (int)(v*getResources().getDisplayMetrics().density);}
+           TextView tv(String t,int sz,int col){TextView x=new TextView(this);x.setText(t);x.setTextSize(sz);x.setTextColor(col);x.setPadding(dp(6),dp(4),dp(6),dp(4));box.addView(x);return x;}
+           Button bt(String t,View.OnClickListener l){Button b=new Button(this);b.setText(t);b.setAllCaps(false);b.setOnClickListener(l);return b;}
+           EditText ed(String hint,String val,boolean multi){EditText e=new EditText(this);e.setHint(hint);e.setText(val);e.setHintTextColor(0xFF777777);if(multi){e.setMinLines(4);e.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE);}box.addView(e);return e;}
+           void toast(String s){Toast.makeText(this,s,Toast.LENGTH_LONG).show();}
+           void bg(Runnable r){new Thread(r).start();}
+           void post(final String m){runOnUiThread(new Runnable(){public void run(){toast(m);if(tab<3)render();}});}
+           boolean sms(){return checkSelfPermission(Manifest.permission.RECEIVE_SMS)==PackageManager.PERMISSION_GRANTED;}
+           boolean bat(){return ((PowerManager)getSystemService(POWER_SERVICE)).isIgnoringBatteryOptimizations(getPackageName());}
+           String fmt(long t){return new SimpleDateFormat("dd MMM HH:mm:ss",Locale.US).format(new Date(t));}
+           void yn(String s,boolean ok){tv((ok?"✅ ":"❌ ")+s,15,ok?0xFF66BB6A:0xFFEF5350);}
+           void askPerm(){List<String> p=new ArrayList<>();p.add(Manifest.permission.RECEIVE_SMS);if(Build.VERSION.SDK_INT>=33)p.add("android.permission.POST_NOTIFICATIONS");requestPermissions(p.toArray(new String[0]),1);}
+           void startSvc(){if(!sms())return;try{Intent s=new Intent(this,KeepAliveService.class);if(Build.VERSION.SDK_INT>=26)startForegroundService(s);else startService(s);}catch(Exception e){}}
+           public void onRequestPermissionsResult(int c,String[] p,int[] r){startSvc();render();}
+           protected void onCreate(Bundle b){super.onCreate(b);
+            LinearLayout root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);root.setBackgroundColor(0xFF121212);root.setPadding(dp(10),dp(30),dp(10),dp(6));
+            TextView t=new TextView(this);t.setText("📩 SMS Reader");t.setTextSize(20);t.setTextColor(0xFFFFFFFF);root.addView(t);
+            HorizontalScrollView hs=new HorizontalScrollView(this);LinearLayout row=new LinearLayout(this);hs.addView(row);
+            String[] n={"স্ট্যাটাস","MFS SMS","অন্যান্য","সেটিংস","গিভওয়ে"};
+            for(int i=0;i<n.length;i++){final int k=i;row.addView(bt(n[i],new View.OnClickListener(){public void onClick(View v){tab=k;render();}}));}
+            root.addView(hs);ScrollView sv=new ScrollView(this);box=new LinearLayout(this);box.setOrientation(LinearLayout.VERTICAL);sv.addView(box);
+            root.addView(sv,new LinearLayout.LayoutParams(-1,0,1));setContentView(root);
+            if(!sms())askPerm();else startSvc();render();}
+           protected void onResume(){super.onResume();h.post(tk);}
+           protected void onPause(){super.onPause();h.removeCallbacks(tk);}
+           void render(){box.removeAllViews();if(tab==0)status();else if(tab==1)list(true);else if(tab==2)list(false);else if(tab==3)settings();else give();}
+           void status(){Db d=Db.get(this);final SharedPreferences p=Fb.p(this);
+            yn("SMS পারমিশন",sms());yn("ব্যাটারি অপ্টিমাইজেশন বন্ধ",bat());yn("Firebase কনফিগ সেট",Fb.ok(this));
+            List<Db.Row> l=d.q(null,1);tv("শেষ SMS: "+(l.isEmpty()?"—":fmt(l.get(0).ts)),14,0xFFFFFFFF);
+            long ok=p.getLong("okAt",0);tv("শেষ Firebase সিঙ্ক: "+(ok==0?"—":fmt(ok)),14,0xFFFFFFFF);
+            tv("মোট SMS: "+d.n(null)+" | MFS: "+d.n("mfs=1")+" | অন্যান্য: "+d.n("mfs=0")+"\nFirebase-এ গেছে: "+d.n("sy=1")+" | বাকি: "+d.n("up=1 AND sy=0"),14,0xFFFFFFFF);
+            String e=p.getString("err","");if(!e.isEmpty())tv("⚠ এরর: "+e,13,0xFFEF5350);
+            box.addView(bt("SMS পারমিশন দাও",new View.OnClickListener(){public void onClick(View v){askPerm();}}));
+            box.addView(bt("ব্যাটারি অপ্টিমাইজেশন বন্ধ করো",new View.OnClickListener(){public void onClick(View v){try{startActivity(new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,Uri.parse("package:"+getPackageName())));}catch(Exception x){toast(""+x);}}}));
+            box.addView(bt("অ্যাপ সেটিংস (অটো-স্টার্ট / ব্যাকগ্রাউন্ড)",new View.OnClickListener(){public void onClick(View v){startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:"+getPackageName())));}}));
+            box.addView(bt("এখনই সিঙ্ক করো",new View.OnClickListener(){public void onClick(View v){bg(new Runnable(){public void run(){int n=Sync.run(MainActivity.this);post(n>0?"✅ "+n+" টি Firebase-এ গেছে":"কিছু যায়নি। "+p.getString("err",""));}});}}));
+            box.addView(bt("🧪 টেস্ট (নকল bKash SMS)",new View.OnClickListener(){public void onClick(View v){bg(new Runnable(){public void run(){
+             String trx="TEST"+code(6);Sync.save(MainActivity.this,"bKash","You have received Tk 10.00 from 01700000000. Fee Tk 0.00. Balance Tk 110.00. TrxID "+trx+" at "+fmt(System.currentTimeMillis()),System.currentTimeMillis());
+             int n=Sync.run(MainActivity.this);post(n>0?"✅ টেস্ট পাস! Firebase sms_inbox/"+trx:"❌ "+p.getString("err",""));}});}}));}
+           static String code(int n){String a="ABCDEFGHJKLMNPQRSTUVWXYZ23456789";Random r=new Random();StringBuilder s=new StringBuilder();for(int i=0;i<n;i++)s.append(a.charAt(r.nextInt(a.length())));return s.toString();}
+           void list(boolean m){List<Db.Row> l=Db.get(this).q("mfs="+(m?1:0),100);if(l.isEmpty())tv("কোনো SMS নেই",14,0xFFAAAAAA);
+            for(Db.Row r:l){String st=!m?"শুধু ফোনে (অনলাইনে যায়নি)":!r.up?"পেমেন্ট নয়, আপলোড হয়নি":r.sy?"✅ Firebase-এ গেছে":"⏳ বাকি"+(r.err!=null?" ⚠ "+r.err:"");
+             tv(r.sender+" • "+fmt(r.ts)+(m&&r.trx!=null?"\nTrxID: "+r.trx+"  ৳"+r.amt:"")+"\n"+st+"\n"+r.body,12,0xFFDDDDDD).setBackgroundColor(0xFF1E1E1E);}}
+           void settings(){final SharedPreferences p=Fb.p(this);
+            tv("বর্তমান DB: "+(p.getString("db","").isEmpty()?"—":p.getString("db","")),13,0xFF80CBC4);
+            tv("firebaseConfig পেস্ট করুন (বা শুধু databaseURL)। apiKey লাগবে শুধু লগইন করলে:",13,0xFFFFFFFF);
+            final EditText cfg=ed("databaseURL: \"https://...firebaseio.com\", apiKey: \"...\"","",true);
+            tv("Firebase লগইন (ফাঁকা রাখলে টেস্ট মোড, লগইন ছাড়া):",13,0xFFFFFFFF);
+            final EditText em=ed("ইমেইল",p.getString("email",""),false);final EditText pw=ed("পাসওয়ার্ড",p.getString("pass",""),false);pw.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD);
+            box.addView(bt("সেভ করো",new View.OnClickListener(){public void onClick(View v){String t=cfg.getText().toString().trim();SharedPreferences.Editor e=p.edit();
+             if(!t.isEmpty()){String u=get("databaseURL\\s*[:=]\\s*[\"']([^\"']+)",t);if(u==null&&t.startsWith("http"))u=t;if(u!=null)e.putString("db",u.trim().replaceAll("/+$",""));String k=get("apiKey\\s*[:=]\\s*[\"']([^\"']+)",t);if(k!=null)e.putString("key",k);}
+             e.putString("email",em.getText().toString().trim()).putString("pass",pw.getText().toString()).apply();Fb.tok=null;toast("সেভ হয়েছে");render();}}));
+            box.addView(bt("কানেকশন টেস্ট",new View.OnClickListener(){public void onClick(View v){bg(new Runnable(){public void run(){try{JSONObject o=new JSONObject();o.put("ts",System.currentTimeMillis());Fb.put(MainActivity.this,"app_test/ping",o);post("✅ Firebase কানেকশন ঠিক");}catch(Exception e){post("❌ "+e.getMessage());}}});}}));}
+           static String get(String re,String s){Matcher m=Pattern.compile(re).matcher(s);return m.find()?m.group(1):null;}
+           void give(){tv("গিভওয়ে কোড: Firebase-এ পেইড হিসেবে যায়। একটা কোড একবারই ব্যবহার হয় (সাইট 'used' ধরে)।",13,0xFFFFFFFF);
+            final EditText pre=ed("প্রিফিক্স","GIVE",false);final EditText cnt=ed("কয়টি কোড (১-২০০)","1",false);final EditText amt=ed("টাকা","50",false);
+            cnt.setInputType(InputType.TYPE_CLASS_NUMBER);amt.setInputType(InputType.TYPE_CLASS_NUMBER);
+            final TextView out=tv("",15,0xFF80CBC4);out.setTextIsSelectable(true);
+            box.addView(bt("কোড বানাও ও Firebase-এ পাঠাও",new View.OnClickListener(){public void onClick(View v){
+             final int n,a;try{n=Math.min(200,Math.max(1,Integer.parseInt(cnt.getText().toString().trim())));a=Integer.parseInt(amt.getText().toString().trim());}catch(Exception e){toast("সংখ্যা ঠিক দিন");return;}
+             final String px=pre.getText().toString().trim().replaceAll("[^A-Za-z0-9]","");out.setText("পাঠানো হচ্ছে...");
+             bg(new Runnable(){public void run(){final StringBuilder sb=new StringBuilder();try{for(int i=0;i<n;i++){String c=px+"-"+code(6);JSONObject o=new JSONObject();o.put("sender","Giveaway-bKash");o.put("trxId",c);o.put("amount",a);o.put("receivedAt",System.currentTimeMillis());o.put("body","Custom giveaway code");o.put("custom",true);Fb.put(MainActivity.this,"sms_inbox/"+c,o);sb.append(c).append("  (৳").append(a).append(")\n");}
+              }catch(Exception e){sb.append("\n❌ ").append(e.getMessage());}
+              runOnUiThread(new Runnable(){public void run(){out.setText(sb.toString());}});}});}}));}
+          }
+          EOF_9
+          mkdir -p $(dirname app/src/main/java/com/khelo/smsreader/SmsReceiver.java)
+          cat > app/src/main/java/com/khelo/smsreader/SmsReceiver.java <<'EOF_10'
+          package com.khelo.smsreader;
+          import android.content.*;import android.provider.Telephony;import android.telephony.SmsMessage;import java.util.*;
+          public class SmsReceiver extends BroadcastReceiver{
+           public void onReceive(final Context c,Intent i){
+            if(!"android.provider.Telephony.SMS_RECEIVED".equals(i.getAction()))return;
+            SmsMessage[] m=Telephony.Sms.Intents.getMessagesFromIntent(i);if(m==null||m.length==0)return;
+            final Map<String,StringBuilder> by=new LinkedHashMap<>();
+            for(SmsMessage s:m){String a=s.getOriginatingAddress();if(a==null)a="Unknown";if(!by.containsKey(a))by.put(a,new StringBuilder());by.get(a).append(s.getMessageBody());}
+            final long ts=System.currentTimeMillis();final PendingResult pr=goAsync();
+            new Thread(new Runnable(){public void run(){try{for(Map.Entry<String,StringBuilder> e:by.entrySet())Sync.save(c,e.getKey(),e.getValue().toString(),ts);Sync.run(c);}catch(Exception x){}finally{pr.finish();}}}).start();}
+          }
+          EOF_10
+          mkdir -p $(dirname app/src/main/java/com/khelo/smsreader/Sync.java)
+          cat > app/src/main/java/com/khelo/smsreader/Sync.java <<'EOF_11'
+          package com.khelo.smsreader;
+          import android.content.*;import org.json.*;import java.util.regex.*;
+          public class Sync{
+           static String prov(String s){s=s==null?"":s.toLowerCase().replace(" ","");if(s.contains("bkash"))return "bKash";if(s.contains("nagad"))return "Nagad";if(s.contains("rocket")||s.contains("16216"))return "Rocket";return null;}
+           static String find(String re,String b){Matcher m=Pattern.compile(re).matcher(b);return m.find()?m.group(1):null;}
+           static long save(Context c,String sender,String body,long ts){
+            Db.Row r=new Db.Row();r.sender=sender;r.body=body;r.ts=ts;r.prov=prov(sender);r.mfs=r.prov!=null;
+            if(r.mfs){r.trx=find("(?i)(?:trx\\s?id|txn\\s?id|transaction\\s?id)\\s*[:\\-]?\\s*([A-Za-z0-9]{6,})",body);
+             String a=find("(?i)(?:tk|bdt|৳)\\.?\\s*([0-9][0-9,]*(?:\\.[0-9]+)?)",body);if(a!=null)r.amt=a.replace(",","");
+             r.up=r.trx!=null&&r.amt!=null&&body.toLowerCase().contains("received");}
+            return Db.get(c).add(r);}
+           static synchronized int run(Context c){
+            int n=0;SharedPreferences p=Fb.p(c);
+            for(Db.Row r:Db.get(c).q("up=1 AND sy=0",200)){
+             try{JSONObject o=new JSONObject();o.put("sender",r.prov);o.put("trxId",r.trx);o.put("amount",Double.parseDouble(r.amt));o.put("receivedAt",r.ts);o.put("body",r.body);o.put("source","sms-app");
+              Fb.put(c,"sms_inbox/"+r.trx,o);Db.get(c).mark(r.id,true,null);n++;p.edit().putString("err","").putLong("okAt",System.currentTimeMillis()).apply();
+             }catch(Exception e){String m=String.valueOf(e.getMessage());Db.get(c).mark(r.id,false,m);p.edit().putString("err",m).apply();break;}}
+            return n;}
+          }
+          EOF_11
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Build
+        run: gradle assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SmsReader-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
